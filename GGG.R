@@ -12,6 +12,7 @@ library(parsnip)
 library(bonsai)
 library(lightgbm)
 library(discrim)
+library(dbarts)
 sample <- "sample_submission.csv"
 test <- "test.csv"
 train <- "train.csv"
@@ -31,10 +32,18 @@ mycleandata
 #randomforest
 mycleandata <- train1 %>% 
   mutate(type=as.factor(type))
+mycleandata
 my_recipe <- recipe(type~., data=mycleandata) %>% 
   step_mutate(color=factor(color)) %>%
   step_lencode_glm(all_nominal_predictors(), outcome = vars(type)) %>% 
+  step_interact(terms = ~ bone_length:hair_length) %>% 
   step_normalize(all_numeric_predictors()) 
+
+my_recipe <- recipe(type~., data=mycleandata) %>% 
+  step_mutate(color=factor(color)) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_numeric_predictors()) %>% 
+?prep
 my_recipe1 <- prep(my_recipe)
 bake(my_recipe1, new_data=mycleandata)
 forest_mod <- rand_forest(mtry = tune(),
@@ -97,7 +106,13 @@ vroom_write(x=kaggle_submission, file="./GGGKNn12.csv", delim=",")
 
 #naivebayes
 
-nb_model <- naive_Bayes(Laplace=tune(), smoothness=tune()) %>% 
+my_recipe <- recipe(type~., data=mycleandata) %>% 
+  step_mutate(color=factor(color)) %>%
+  step_lencode_glm(all_nominal_predictors(), outcome = vars(type)) %>% 
+  step_interact(terms = ~ id:hair_length) %>% 
+  step_normalize(all_numeric_predictors())
+mycleandata
+nb_model <- naive_Bayes(Laplace=0, smoothness=1.515) %>% 
   set_mode("classification") %>% 
   set_engine("naivebayes")
 
@@ -114,20 +129,22 @@ CV_results_nb <- nb_wf %>%
 
 bestTune_nb <- CV_results_nb %>% 
   select_best(metric="roc_auc")
+bestTune_nb
 
 final_wf_nb <- 
   nb_wf %>% 
-  finalize_workflow(bestTune_nb) %>% 
+  #finalize_workflow(bestTune_nb) %>% 
   fit(data=mycleandata)
 
 predict <- final_wf_nb %>% 
   predict(new_data=test1, type="class")
 
-
+predict
 kaggle_submission <- predict %>% 
   bind_cols(., test1) %>% 
   select(id, .pred_class) %>% 
   rename(type=.pred_class)
+
 vroom_write(x=kaggle_submission, file="./GGGnaive12.csv", delim=",")
 
 #SVM
@@ -140,15 +157,15 @@ rad_wf <- workflow() %>%
   add_recipe(my_recipe) %>% 
   add_model(svmRadial)
 
-tuning_grid_rad <- grid_regular(rbf_sigma(), cost(), levels=10)
+tuning_grid_rad <- grid_regular(rbf_sigma(), cost(), levels=13)
 
-folds_rad <- vfold_cv(mycleandata, v = 5, repeats=1)
+folds_rad <- vfold_cv(mycleandata, v = 10, repeats=1)
 
 CV_results_rad <- rad_wf %>% 
-  tune_grid(resamples=folds_rad, grid=tuning_grid_rad, metrics=metric_set(roc_auc))
+  tune_grid(resamples=folds_rad, grid=tuning_grid_rad, metrics=metric_set(accuracy))
 CV_results_rad
 bestTune_rad <- CV_results_rad %>% 
-  select_best(metric="roc_auc")
+  select_best(metric="accuracy")
 bestTune_rad
 
 final_wf_rad <- 
@@ -254,3 +271,25 @@ kaggle_submission <- predict %>%
   select(id, .pred_class) %>% 
   rename(type=.pred_class)
 vroom_write(x=kaggle_submission, file="./GGGboost12.csv", delim=",")
+library(dbarts)
+#Bart
+bart_model <- parsnip::bart(trees=500) %>% 
+  set_engine("dbarts") %>% 
+  set_mode("classification")
+
+bart_wf <- workflow() %>% 
+  add_recipe(my_recipe) %>% 
+  add_model(bart_model)
+?bart
+final_wf_bart <- 
+  bart_wf %>% 
+  fit(data=mycleandata)
+
+predict <- final_wf_bart %>% 
+  predict(new_data=test1, type="class")
+
+kaggle_submission <- predict %>% 
+  bind_cols(., test1) %>% 
+  select(id, .pred_class) %>% 
+  rename(type=.pred_class)
+vroom_write(x=kaggle_submission, file="./GGGbart12.csv", delim=",")
